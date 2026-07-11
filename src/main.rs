@@ -5,16 +5,32 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod chars;
+mod debug_log;
 mod input;
+mod pump_keepalive;
+mod single_instance;
 mod tray;
+mod win_ctl;
+
+use std::sync::Arc;
 
 use chars::SECTIONS;
 use eframe::egui::{self, ViewportCommand};
+use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+use single_instance::WINDOW_TITLE;
 use tray::TrayHandle;
-use tray_icon::menu::MenuEvent;
-use tray_icon::{MouseButton, MouseButtonState, TrayIconEvent};
+use win_ctl::WinCtl;
 
 fn main() -> eframe::Result<()> {
+    debug_log::init();
+    debug_log::log("main", "start");
+
+    if !single_instance::try_acquire() {
+        debug_log::log("main", "another instance running → exit");
+        // 2 つ目のプロセス: 既存を前面に出して静かに終了
+        return Ok(());
+    }
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([300.0, 380.0])
@@ -24,28 +40,45 @@ fn main() -> eframe::Result<()> {
             .with_always_on_top()
             .with_transparent(false)
             .with_resizable(true)
-            .with_title("罫線")
+            .with_title(WINDOW_TITLE)
             .with_icon(app_icon()),
         ..Default::default()
     };
 
     eframe::run_native(
-        "罫線",
+        WINDOW_TITLE,
         options,
         Box::new(|cc| {
             configure_fonts(&cc.egui_ctx);
             configure_style(&cc.egui_ctx);
 
-            let tray = TrayHandle::create().unwrap_or_else(|e| {
+            let win = WinCtl::new();
+            let keepalive = pump_keepalive::start(win.clone());
+
+            let ctx = cc.egui_ctx.clone();
+            let tray = TrayHandle::create(win.clone(), move || {
+                ctx.request_repaint();
+            })
+            .unwrap_or_else(|e| {
                 eprintln!("トレイ作成に失敗しました: {e}");
                 panic!("system tray is required: {e}");
             });
 
+            debug_log::log(
+                "main",
+                format!("ui ready log={}", debug_log::path_string()),
+            );
+
+            #[cfg(debug_assertions)]
+            let last_status = format!("log: {}", debug_log::path_string());
+            #[cfg(not(debug_assertions))]
+            let last_status = String::new();
+
             Ok(Box::new(KeisenApp {
                 tray: Some(tray),
-                last_status: String::new(),
-                window_visible: true,
-                should_quit: false,
+                win,
+                last_status,
+                _keepalive: keepalive,
             }))
         }),
     )
@@ -171,76 +204,30 @@ fn configure_style(ctx: &egui::Context) {
 struct KeisenApp {
     /// ドロップするとトレイが消えるので保持する
     tray: Option<TrayHandle>,
+    /// トレイハンドラと共有する表示制御（Win32 ShowWindow のみで隠す）
+    win: Arc<WinCtl>,
     last_status: String,
-    window_visible: bool,
-    /// トレイ「終了」からの本当の終了
-    should_quit: bool,
+    /// メッセージポンプ起こし（Drop で停止）
+    _keepalive: pump_keepalive::KeepaliveHandle,
 }
 
 impl KeisenApp {
-    fn show_window(&mut self, ctx: &egui::Context) {
-        self.window_visible = true;
-        ctx.send_viewport_cmd(ViewportCommand::Visible(true));
-        ctx.send_viewport_cmd(ViewportCommand::Focus);
-        ctx.send_viewport_cmd(ViewportCommand::WindowLevel(
-            egui::WindowLevel::AlwaysOnTop,
-        ));
-    }
-
-    fn hide_window(&mut self, ctx: &egui::Context) {
-        self.window_visible = false;
-        ctx.send_viewport_cmd(ViewportCommand::Visible(false));
-    }
-
-    fn toggle_window(&mut self, ctx: &egui::Context) {
-        if self.window_visible {
-            self.hide_window(ctx);
-        } else {
-            self.show_window(ctx);
+    fn capture_hwnd(&self, frame: &eframe::Frame) {
+        if self.win.hwnd().is_some() {
+            return;
         }
-    }
-
-    fn request_quit(&mut self, ctx: &egui::Context) {
-        self.should_quit = true;
-        // 隠していると Close が届かないことがあるので先に表示
-        ctx.send_viewport_cmd(ViewportCommand::Visible(true));
-        ctx.send_viewport_cmd(ViewportCommand::Close);
-    }
-
-    fn poll_tray(&mut self, ctx: &egui::Context) {
-        while let Ok(event) = TrayIconEvent::receiver().try_recv() {
-            match event {
-                TrayIconEvent::Click {
-                    button: MouseButton::Left,
-                    button_state: MouseButtonState::Up,
-                    ..
-                } => {
-                    self.toggle_window(ctx);
-                }
-                TrayIconEvent::DoubleClick {
-                    button: MouseButton::Left,
-                    ..
-                } => {
-                    self.show_window(ctx);
-                }
-                _ => {}
-            }
-        }
-
-        let (show_id, hide_id, quit_id) = match &self.tray {
-            Some(t) => (t.show_id.clone(), t.hide_id.clone(), t.quit_id.clone()),
-            None => return,
+        let Ok(handle) = frame.window_handle() else {
+            return;
         };
-
-        while let Ok(event) = MenuEvent::receiver().try_recv() {
-            if event.id == show_id {
-                self.show_window(ctx);
-            } else if event.id == hide_id {
-                self.hide_window(ctx);
-            } else if event.id == quit_id {
-                self.request_quit(ctx);
-            }
+        if let RawWindowHandle::Win32(h) = handle.as_raw() {
+            self.win.set_hwnd(h.hwnd.get());
         }
+    }
+
+    fn hide_to_tray(&self) {
+        // ViewportCommand::Visible(false) は使わない（eframe ループ停止の原因）
+        debug_log::log("ui", "hide_to_tray (× or close)");
+        self.win.hide();
     }
 }
 
@@ -250,20 +237,51 @@ impl eframe::App for KeisenApp {
         egui::Rgba::from_srgba_unmultiplied(32, 34, 38, 255).to_array()
     }
 
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        input::track_foreground();
-        // 非表示中もトレイイベントを拾うため定期リペイント
-        ctx.request_repaint_after(std::time::Duration::from_millis(100));
+    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        debug_log::note_update();
+        // 心拍は debug_log 内 tick。詳細は 2 秒に 1 回だけ
+        static LAST_HB: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let tick = debug_log::update_tick();
+        let last = LAST_HB.load(std::sync::atomic::Ordering::Relaxed);
+        if tick.saturating_sub(last) >= 120 {
+            // ~2s if ~60fps; もっと粗くてもよい
+            LAST_HB.store(tick, std::sync::atomic::Ordering::Relaxed);
+            debug_log::log(
+                "update",
+                format!(
+                    "heartbeat want_vis={} really_vis={} fg={}",
+                    self.win.want_visible(),
+                    self.win.is_really_visible(),
+                    self.win.is_really_foreground()
+                ),
+            );
+        }
 
-        self.poll_tray(ctx);
+        self.capture_hwnd(frame);
+        input::track_foreground();
+
+        // 終了要求（トレイから）。トレイアイコンを落として Close を通す
+        if self.win.should_quit() {
+            if self.tray.take().is_some() {
+                debug_log::log("ui", "should_quit → Close + drop tray");
+                ctx.send_viewport_cmd(ViewportCommand::Close);
+            }
+        }
 
         // × / Alt+F4 等はトレイへ格納（「終了」メニュー時のみ本当に閉じる）
         if ctx.input(|i| i.viewport().close_requested()) {
-            if !self.should_quit {
+            if self.win.should_quit() {
+                debug_log::log("ui", "close_requested (quit)");
+                self.tray.take();
+            } else {
+                debug_log::log("ui", "close_requested → CancelClose + hide");
                 ctx.send_viewport_cmd(ViewportCommand::CancelClose);
-                self.hide_window(ctx);
+                self.hide_to_tray();
             }
         }
+
+        // 非表示中も update を回す保険（keepalive の PostMessage と併用）
+        ctx.request_repaint_after(std::time::Duration::from_millis(200));
 
         // フロート用タイトルバー（ドラッグ移動 + トレイへ隠す）
         egui::TopBottomPanel::top("float_title")
@@ -299,7 +317,7 @@ impl eframe::App for KeisenApp {
                         .frame(false),
                     );
                     if close.clicked() {
-                        self.hide_window(ctx);
+                        self.hide_to_tray();
                     }
                     if close.hovered() {
                         ui.painter().rect_filled(
@@ -415,6 +433,10 @@ impl eframe::App for KeisenApp {
                 // 端のリサイズハンドル（枠なしでもサイズ変更できるように）
                 draw_resize_handles(ui, ctx);
             });
+
+        // トレイトグル用: クリックでフォーカスが奪われる前の「前面だったか」
+        self.win
+            .set_was_foreground(self.win.is_really_foreground());
     }
 }
 

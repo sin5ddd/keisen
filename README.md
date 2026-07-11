@@ -16,6 +16,7 @@ Click a character like `├` `│` `└` and it is typed into the currently focu
 - Always-on-top borderless float window (no taskbar button)
 - **System tray** residency (left-click show/hide; right-click menu: Show / Hide / Quit)
 - `×` hides to the tray (does not quit); quit from the tray menu
+- **Single instance** — a second launch focuses the existing window instead
 - Single vertical scroll (no tabs)
 - Order: **Frequent → Light → Heavy → Double → Mixed**
 - Frequent chars first: `├ │ └ ─ ┬`
@@ -97,10 +98,12 @@ keisen/
 │   ├── icon.png / icon.ico   # app icon (dark keycap + 田)
 │   └── generate_icon.py      # regenerate icons
 └── src/
-    ├── main.rs    # window & UI
-    ├── chars.rs   # character data
-    ├── input.rs   # send keys to foreground window
-    └── tray.rs    # system tray icon & menu
+    ├── main.rs            # window & UI
+    ├── chars.rs           # character data
+    ├── input.rs           # send keys to foreground window
+    ├── tray.rs            # system tray icon & menu
+    ├── win_ctl.rs         # show/hide via Win32 (keeps eframe loop alive)
+    └── single_instance.rs # named mutex single-instance
 ```
 
 ## Stack
@@ -131,6 +134,7 @@ Windows 向けの **罫線入力フローティングアプリ**。
 - **常時最前面**の枠なしフロートウィンドウ（タスクバー非表示）
 - **タスクトレイ常駐**（左クリックで表示/非表示、右クリックで表示/隠す/終了）
 - `×` は終了ではなく**トレイへ隠す**（終了はトレイメニューから）
+- **単一起動** — 2 つ目を起動すると既存ウィンドウを前面に出す
 - **縦スクロール**で全文字を一覧（タブなし）
 - 並び順: **よく使う → 細 → 太 → 二重 → 混**
 - 先頭に使用頻度の高い `├ │ └ ─ ┬`
@@ -215,10 +219,12 @@ keisen/
 │   ├── icon.png / icon.ico   # アプリアイコン（キートップ + 田）
 │   └── generate_icon.py      # アイコン再生成
 └── src/
-    ├── main.rs    # ウィンドウ・UI
-    ├── chars.rs   # 罫線文字データ
-    ├── input.rs   # 前面ウィンドウへの文字送信
-    └── tray.rs    # タスクトレイ
+    ├── main.rs            # ウィンドウ・UI
+    ├── chars.rs           # 罫線文字データ
+    ├── input.rs           # 前面ウィンドウへの文字送信
+    ├── tray.rs            # タスクトレイ
+    ├── win_ctl.rs         # Win32 での表示/非表示（eframe ループ維持）
+    └── single_instance.rs # 名前付き Mutex による単一起動
 ```
 
 ## 技術スタック
