@@ -1,13 +1,18 @@
 //! 罫線入力フローティングアプリ
 //! 常時最前面のパレットから、アクティブなエディタへ罫線文字を送る。
+//! タスクトレイに常駐し、× は終了ではなく非表示にする。
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod chars;
 mod input;
+mod tray;
 
 use chars::SECTIONS;
 use eframe::egui::{self, ViewportCommand};
+use tray::TrayHandle;
+use tray_icon::menu::MenuEvent;
+use tray_icon::{MouseButton, MouseButtonState, TrayIconEvent};
 
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
@@ -30,7 +35,18 @@ fn main() -> eframe::Result<()> {
         Box::new(|cc| {
             configure_fonts(&cc.egui_ctx);
             configure_style(&cc.egui_ctx);
-            Ok(Box::new(KeisenApp::default()))
+
+            let tray = TrayHandle::create().unwrap_or_else(|e| {
+                eprintln!("トレイ作成に失敗しました: {e}");
+                panic!("system tray is required: {e}");
+            });
+
+            Ok(Box::new(KeisenApp {
+                tray: Some(tray),
+                last_status: String::new(),
+                window_visible: true,
+                should_quit: false,
+            }))
         }),
     )
 }
@@ -152,9 +168,80 @@ fn configure_style(ctx: &egui::Context) {
     ctx.set_style(style);
 }
 
-#[derive(Default)]
 struct KeisenApp {
+    /// ドロップするとトレイが消えるので保持する
+    tray: Option<TrayHandle>,
     last_status: String,
+    window_visible: bool,
+    /// トレイ「終了」からの本当の終了
+    should_quit: bool,
+}
+
+impl KeisenApp {
+    fn show_window(&mut self, ctx: &egui::Context) {
+        self.window_visible = true;
+        ctx.send_viewport_cmd(ViewportCommand::Visible(true));
+        ctx.send_viewport_cmd(ViewportCommand::Focus);
+        ctx.send_viewport_cmd(ViewportCommand::WindowLevel(
+            egui::WindowLevel::AlwaysOnTop,
+        ));
+    }
+
+    fn hide_window(&mut self, ctx: &egui::Context) {
+        self.window_visible = false;
+        ctx.send_viewport_cmd(ViewportCommand::Visible(false));
+    }
+
+    fn toggle_window(&mut self, ctx: &egui::Context) {
+        if self.window_visible {
+            self.hide_window(ctx);
+        } else {
+            self.show_window(ctx);
+        }
+    }
+
+    fn request_quit(&mut self, ctx: &egui::Context) {
+        self.should_quit = true;
+        // 隠していると Close が届かないことがあるので先に表示
+        ctx.send_viewport_cmd(ViewportCommand::Visible(true));
+        ctx.send_viewport_cmd(ViewportCommand::Close);
+    }
+
+    fn poll_tray(&mut self, ctx: &egui::Context) {
+        while let Ok(event) = TrayIconEvent::receiver().try_recv() {
+            match event {
+                TrayIconEvent::Click {
+                    button: MouseButton::Left,
+                    button_state: MouseButtonState::Up,
+                    ..
+                } => {
+                    self.toggle_window(ctx);
+                }
+                TrayIconEvent::DoubleClick {
+                    button: MouseButton::Left,
+                    ..
+                } => {
+                    self.show_window(ctx);
+                }
+                _ => {}
+            }
+        }
+
+        let (show_id, hide_id, quit_id) = match &self.tray {
+            Some(t) => (t.show_id.clone(), t.hide_id.clone(), t.quit_id.clone()),
+            None => return,
+        };
+
+        while let Ok(event) = MenuEvent::receiver().try_recv() {
+            if event.id == show_id {
+                self.show_window(ctx);
+            } else if event.id == hide_id {
+                self.hide_window(ctx);
+            } else if event.id == quit_id {
+                self.request_quit(ctx);
+            }
+        }
+    }
 }
 
 impl eframe::App for KeisenApp {
@@ -165,9 +252,20 @@ impl eframe::App for KeisenApp {
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         input::track_foreground();
+        // 非表示中もトレイイベントを拾うため定期リペイント
         ctx.request_repaint_after(std::time::Duration::from_millis(100));
 
-        // フロート用タイトルバー（ドラッグ移動 + 閉じる）
+        self.poll_tray(ctx);
+
+        // × / Alt+F4 等はトレイへ格納（「終了」メニュー時のみ本当に閉じる）
+        if ctx.input(|i| i.viewport().close_requested()) {
+            if !self.should_quit {
+                ctx.send_viewport_cmd(ViewportCommand::CancelClose);
+                self.hide_window(ctx);
+            }
+        }
+
+        // フロート用タイトルバー（ドラッグ移動 + トレイへ隠す）
         egui::TopBottomPanel::top("float_title")
             .exact_height(32.0)
             .frame(
@@ -201,7 +299,7 @@ impl eframe::App for KeisenApp {
                         .frame(false),
                     );
                     if close.clicked() {
-                        ctx.send_viewport_cmd(ViewportCommand::Close);
+                        self.hide_window(ctx);
                     }
                     if close.hovered() {
                         ui.painter().rect_filled(
@@ -242,7 +340,7 @@ impl eframe::App for KeisenApp {
             .show(ctx, |ui| {
                 if self.last_status.is_empty() {
                     ui.label(
-                        egui::RichText::new("クリックで入力 · 下にスクロールで全部")
+                        egui::RichText::new("クリックで入力 · トレイに常駐 · × で隠す")
                             .small()
                             .color(egui::Color32::from_rgb(180, 190, 200)),
                     );

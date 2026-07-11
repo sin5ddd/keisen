@@ -1,6 +1,6 @@
 [package]
 name = "keisen"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 license = "MIT"
 description = "Floating palette for typing box-drawing (keisen) characters on Windows"
@@ -12,6 +12,8 @@ readme = "README.md"
 # UI は Windows システムフォントのみを実行時ロードする。
 eframe = { version = "0.33.3", default-features = false, features = ["glow"] }
 image = { version = "0.25.10", default-features = false, features = ["png"] }
+# Windows 専用。gtk / libxdo は不要。
+tray-icon = { version = "0.24.1", default-features = false }
 windows = { version = "0.62.2", features = ["Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_Foundation", "Win32_System_Threading"] }
 
 [build-dependencies]
