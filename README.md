@@ -43,6 +43,22 @@ cargo build --release
 
 Output: `target/release/keisen.exe`
 
+### Prebuilt releases
+
+GitHub Actions builds a Windows binary when you push a version tag:
+
+```bash
+git tag v0.1.1
+git push origin v0.1.1
+```
+
+The workflow creates a [Release](https://github.com/sin5ddd/keisen/releases) with:
+
+- `keisen.exe`
+- `keisen-<version>-windows-x64.zip` (exe + LICENSE + README)
+
+You can also run **Release** from the Actions tab (`workflow_dispatch`) and pass an existing tag (e.g. `v0.1.0`).
+
 ## Usage
 
 1. Put the caret in Notepad, VS Code, or any editor
@@ -131,6 +147,22 @@ cargo build --release
 ```
 
 成果物: `target/release/keisen.exe`
+
+### ビルド済みリリース
+
+バージョンタグを push すると GitHub Actions が Windows 用バイナリをビルドします。
+
+```bash
+git tag v0.1.1
+git push origin v0.1.1
+```
+
+[Releases](https://github.com/sin5ddd/keisen/releases) に次が添付されます。
+
+- `keisen.exe`
+- `keisen-<version>-windows-x64.zip`（exe + LICENSE + README）
+
+Actions タブから **Release** を手動実行（`workflow_dispatch`）し、既存タグ（例: `v0.1.0`）を指定することもできます。
 
 ## 使い方
 

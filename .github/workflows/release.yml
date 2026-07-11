@@ -1,0 +1,88 @@
+# タグ push で Windows ビルド → GitHub Release に keisen.exe を添付
+#
+# 使い方:
+#   git tag v0.1.1
+#   git push origin v0.1.1
+#
+# 既存タグで再実行したい場合は Actions タブから "Re-run jobs"、
+# または空コミット無しで workflow_dispatch を使う。
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "既存タグ名（例: v0.1.0）。省略時は最新タグを使う"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build (Windows) & Release
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # workflow_dispatch でタグ指定時はその ref を取る
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Resolve version / tag name
+        id: meta
+        shell: bash
+        run: |
+          if [ -n "${{ inputs.tag }}" ]; then
+            TAG="${{ inputs.tag }}"
+          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+          else
+            TAG=$(git describe --tags --abbrev=0)
+          fi
+          # v0.1.0 → 0.1.0
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Resolved tag=$TAG version=$VERSION"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Stage artifacts
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp target/release/keisen.exe dist/keisen.exe
+          cp LICENSE dist/LICENSE
+          cp README.md dist/README.md
+          # 配布用 zip（exe + ドキュメント）
+          cd dist
+          7z a -tzip "keisen-${{ steps.meta.outputs.version }}-windows-x64.zip" keisen.exe LICENSE README.md
+          ls -la
+
+      - name: Create GitHub Release & upload assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: ${{ steps.meta.outputs.tag }}
+          generate_release_notes: true
+          # タグ push でまだ Release が無い場合は作成、既にあれば資産を足す
+          files: |
+            dist/keisen.exe
+            dist/keisen-${{ steps.meta.outputs.version }}-windows-x64.zip
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
