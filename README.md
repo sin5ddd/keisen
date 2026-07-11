@@ -88,6 +88,9 @@ Section {
 keisen/
 ├── Cargo.toml
 ├── README.md
+├── assets/
+│   ├── icon.png / icon.ico   # app icon (dark keycap + 田)
+│   └── generate_icon.py      # regenerate icons
 └── src/
     ├── main.rs    # window & UI
     ├── chars.rs   # character data
@@ -196,6 +199,9 @@ Section {
 keisen/
 ├── Cargo.toml
 ├── README.md
+├── assets/
+│   ├── icon.png / icon.ico   # アプリアイコン（キートップ + 田）
+│   └── generate_icon.py      # アイコン再生成
 └── src/
     ├── main.rs    # ウィンドウ・UI
     ├── chars.rs   # 罫線文字データ

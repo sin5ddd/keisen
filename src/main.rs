@@ -19,7 +19,8 @@ fn main() -> eframe::Result<()> {
             .with_always_on_top()
             .with_transparent(false)
             .with_resizable(true)
-            .with_title("罫線"),
+            .with_title("罫線")
+            .with_icon(app_icon()),
         ..Default::default()
     };
 
@@ -34,77 +35,95 @@ fn main() -> eframe::Result<()> {
     )
 }
 
+/// ダークグレーのキートップに白い「田」
+fn app_icon() -> egui::IconData {
+    let image = image::load_from_memory(include_bytes!("../assets/icon.png"))
+        .expect("embedded app icon")
+        .into_rgba8();
+    let (width, height) = image.dimensions();
+    egui::IconData {
+        rgba: image.into_raw(),
+        width,
+        height,
+    }
+}
+
 /// 罫線表示用のフォントファミリー名
 const FONT_KEISEN: &str = "keisen";
 
+/// 埋め込みフォントは使わず、Windows のシステムフォントだけを実行時ロードする。
 fn configure_fonts(ctx: &egui::Context) {
-    let mut fonts = egui::FontDefinitions::default();
+    // default_fonts feature 無効時は empty 相当
+    let mut fonts = egui::FontDefinitions::empty();
 
-    // 罫線（Box Drawing）を確実に含むフォントを優先して読み込む。
-    // TTC は顔の選択で欠けることがあるので、単体 TTF を先に試す。
+    // 罫線（Box Drawing）を含む可能性が高いもの。TTF を優先（TTC は顔選択で欠けることがある）。
     let box_drawing_fonts = [
-        r"C:\Windows\Fonts\CascadiaMono.ttf",
-        r"C:\Windows\Fonts\CascadiaCode.ttf",
-        r"C:\Windows\Fonts\consola.ttf",
-        r"C:\Windows\Fonts\seguisym.ttf", // Segoe UI Symbol
-        r"C:\Windows\Fonts\segoeui.ttf",
+        ("cascadia_mono", r"C:\Windows\Fonts\CascadiaMono.ttf"),
+        ("cascadia_code", r"C:\Windows\Fonts\CascadiaCode.ttf"),
+        ("consolas", r"C:\Windows\Fonts\consola.ttf"),
+        ("segoe_ui_symbol", r"C:\Windows\Fonts\seguisym.ttf"),
+        ("segoe_ui", r"C:\Windows\Fonts\segoeui.ttf"),
     ];
+    // UI ラベル（日本語）用
     let jp_fonts = [
-        r"C:\Windows\Fonts\NotoSansJP-VF.ttf",
-        r"C:\Windows\Fonts\YuGothM.ttc",
-        r"C:\Windows\Fonts\meiryo.ttc",
-        r"C:\Windows\Fonts\msgothic.ttc",
-        r"C:\Windows\Fonts\BIZ-UDGothicR.ttc",
+        ("noto_sans_jp", r"C:\Windows\Fonts\NotoSansJP-VF.ttf"),
+        ("yu_gothic", r"C:\Windows\Fonts\YuGothM.ttc"),
+        ("meiryo", r"C:\Windows\Fonts\meiryo.ttc"),
+        ("ms_gothic", r"C:\Windows\Fonts\msgothic.ttc"),
+        ("biz_ud_gothic", r"C:\Windows\Fonts\BIZ-UDGothicR.ttc"),
     ];
 
-    let mut loaded_names: Vec<String> = Vec::new();
+    let mut box_names: Vec<String> = Vec::new();
+    let mut jp_names: Vec<String> = Vec::new();
 
-    for (i, path) in box_drawing_fonts.iter().enumerate() {
+    for (name, path) in box_drawing_fonts {
         if let Ok(data) = std::fs::read(path) {
-            let name = format!("box{i}");
             fonts
                 .font_data
-                .insert(name.clone(), egui::FontData::from_owned(data).into());
-            loaded_names.push(name);
-            break; // 1つあれば十分（フォールバックは jp 側）
+                .insert(name.to_owned(), egui::FontData::from_owned(data).into());
+            box_names.push(name.to_owned());
         }
     }
-
-    for (i, path) in jp_fonts.iter().enumerate() {
+    for (name, path) in jp_fonts {
         if let Ok(data) = std::fs::read(path) {
-            let name = format!("jp{i}");
             fonts
                 .font_data
-                .insert(name.clone(), egui::FontData::from_owned(data).into());
-            loaded_names.push(name);
-            break;
+                .insert(name.to_owned(), egui::FontData::from_owned(data).into());
+            jp_names.push(name.to_owned());
         }
     }
 
-    // カスタムファミリー: 罫線フォント → 日本語 → egui デフォルト
-    let mut keisen_family = loaded_names.clone();
-    // デフォルトの比例フォントも後ろに残す
-    if let Some(default_prop) = fonts.families.get(&egui::FontFamily::Proportional) {
-        for f in default_prop {
-            if !keisen_family.contains(f) {
-                keisen_family.push(f.clone());
-            }
+    if box_names.is_empty() && jp_names.is_empty() {
+        panic!(
+            "システムフォントを読み込めませんでした。C:\\Windows\\Fonts に Cascadia / 游ゴシック / メイリオ等があるか確認してください。"
+        );
+    }
+
+    // Proportional: 日本語 → 罫線系
+    let mut proportional = jp_names.clone();
+    for n in &box_names {
+        if !proportional.contains(n) {
+            proportional.push(n.clone());
         }
     }
+
+    // Monospace / 罫線ボタン: 罫線系 → 日本語
+    let mut monospace = box_names.clone();
+    for n in &jp_names {
+        if !monospace.contains(n) {
+            monospace.push(n.clone());
+        }
+    }
+
     fonts
         .families
-        .insert(egui::FontFamily::Name(FONT_KEISEN.into()), keisen_family);
-
-    // UI 全体でも日本語・罫線が使えるように先頭へ
-    for family in [
-        egui::FontFamily::Proportional,
-        egui::FontFamily::Monospace,
-    ] {
-        let list = fonts.families.entry(family).or_default();
-        for name in loaded_names.iter().rev() {
-            list.insert(0, name.clone());
-        }
-    }
+        .insert(egui::FontFamily::Proportional, proportional.clone());
+    fonts
+        .families
+        .insert(egui::FontFamily::Monospace, monospace.clone());
+    fonts
+        .families
+        .insert(egui::FontFamily::Name(FONT_KEISEN.into()), monospace);
 
     ctx.set_fonts(fonts);
 }
