@@ -400,7 +400,13 @@ impl eframe::App for KeisenApp {
                                 ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
 
                                 for &ch in section.chars {
-                                    let label = egui::RichText::new(ch.to_string())
+                                    // 空白は文字が見えないのでラベルは空にし、後で点線枠を描く
+                                    let label_text = if ch.is_whitespace() {
+                                        String::new()
+                                    } else {
+                                        ch.to_string()
+                                    };
+                                    let label = egui::RichText::new(label_text)
                                         .family(egui::FontFamily::Name(FONT_KEISEN.into()))
                                         .size(20.0)
                                         .color(egui::Color32::from_rgb(245, 248, 250));
@@ -411,15 +417,19 @@ impl eframe::App for KeisenApp {
                                             .fill(egui::Color32::from_rgb(55, 60, 68)),
                                     );
 
-                                    let tip = format!("{ch}  U+{:04X}", ch as u32);
+                                    if ch.is_whitespace() {
+                                        paint_space_indicator(ui, response.rect);
+                                    }
+
+                                    let tip = char_tooltip(ch);
                                     let response = response.on_hover_text(tip);
 
                                     if response.clicked() {
                                         let ok = input::type_char(ch);
                                         self.last_status = if ok {
-                                            format!("入力: {ch}")
+                                            format!("入力: {}", char_display_name(ch))
                                         } else {
-                                            format!("送信失敗: {ch}")
+                                            format!("送信失敗: {}", char_display_name(ch))
                                         };
                                     }
                                 }
@@ -437,6 +447,40 @@ impl eframe::App for KeisenApp {
         // トレイトグル用: クリックでフォーカスが奪われる前の「前面だったか」
         self.win
             .set_was_foreground(self.win.is_really_foreground());
+    }
+}
+
+/// ツールチップ用の文字表示（空白は名前で示す）
+fn char_display_name(ch: char) -> String {
+    match ch {
+        '\u{3000}' => "全角スペース".to_string(),
+        c if c.is_whitespace() => format!("空白 U+{:04X}", c as u32),
+        c => c.to_string(),
+    }
+}
+
+fn char_tooltip(ch: char) -> String {
+    format!("{}  U+{:04X}", char_display_name(ch), ch as u32)
+}
+
+/// 空白文字ボタンの中に点線の四角を描く（見た目の目印）
+fn paint_space_indicator(ui: &egui::Ui, button_rect: egui::Rect) {
+    let size = 16.0;
+    let rect = egui::Rect::from_center_size(button_rect.center(), egui::vec2(size, size));
+    let stroke = egui::Stroke::new(1.2, egui::Color32::from_rgb(200, 210, 220));
+    // 点線に近い短いダッシュ
+    let dash_len = 1.6;
+    let gap_len = 1.4;
+    let sides = [
+        [rect.left_top(), rect.right_top()],
+        [rect.right_top(), rect.right_bottom()],
+        [rect.right_bottom(), rect.left_bottom()],
+        [rect.left_bottom(), rect.left_top()],
+    ];
+    for points in sides {
+        ui.painter().add(egui::Shape::dashed_line(
+            &points, stroke, dash_len, gap_len,
+        ));
     }
 }
 
