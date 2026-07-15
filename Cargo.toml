@@ -1,6 +1,6 @@
 [package]
 name = "keisen"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2024"
 license = "MIT"
 description = "Floating palette for typing box-drawing (keisen) characters on Windows"

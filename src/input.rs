@@ -36,8 +36,9 @@ pub fn track_foreground() {
     }
 }
 
-/// 記録済みターゲットへフォーカスを戻し、1 文字を SendInput で送る。
-pub fn type_char(ch: char) -> bool {
+/// 記録済みターゲットへフォーカスを戻し、文字列を SendInput で送る。
+/// 単一文字でも、絵文字（複数符号点 / サロゲートペア）でも可。
+pub fn type_text(text: &str) -> bool {
     track_foreground();
 
     let target = TARGET_HWND
@@ -54,7 +55,7 @@ pub fn type_char(ch: char) -> bool {
         }
     }
 
-    send_unicode_char(ch)
+    send_unicode_text(text)
 }
 
 fn focus_window(hwnd: HWND) {
@@ -72,13 +73,10 @@ fn focus_window(hwnd: HWND) {
     }
 }
 
-/// KEYEVENTF_UNICODE で BMP 文字（およびサロゲートペア）を送る。
-fn send_unicode_char(ch: char) -> bool {
-    let mut units = [0u16; 2];
-    let encoded = ch.encode_utf16(&mut units);
+/// KEYEVENTF_UNICODE で UTF-16 単位を順に送る（サロゲート・VS16 含む）。
+fn send_unicode_text(text: &str) -> bool {
     let mut ok = true;
-
-    for &unit in encoded.iter() {
+    for unit in text.encode_utf16() {
         ok &= send_unicode_unit(unit);
     }
     ok

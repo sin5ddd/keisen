@@ -113,6 +113,8 @@ fn configure_fonts(ctx: &egui::Context) {
         ("segoe_ui_symbol", r"C:\Windows\Fonts\seguisym.ttf"),
         ("segoe_ui", r"C:\Windows\Fonts\segoeui.ttf"),
     ];
+    // 絵文字（➡️ 等の VS16 付き）用
+    let emoji_fonts = [("segoe_ui_emoji", r"C:\Windows\Fonts\seguiemj.ttf")];
     // UI ラベル（日本語）用
     let jp_fonts = [
         ("noto_sans_jp", r"C:\Windows\Fonts\NotoSansJP-VF.ttf"),
@@ -123,6 +125,7 @@ fn configure_fonts(ctx: &egui::Context) {
     ];
 
     let mut box_names: Vec<String> = Vec::new();
+    let mut emoji_names: Vec<String> = Vec::new();
     let mut jp_names: Vec<String> = Vec::new();
 
     for (name, path) in box_drawing_fonts {
@@ -131,6 +134,14 @@ fn configure_fonts(ctx: &egui::Context) {
                 .font_data
                 .insert(name.to_owned(), egui::FontData::from_owned(data).into());
             box_names.push(name.to_owned());
+        }
+    }
+    for (name, path) in emoji_fonts {
+        if let Ok(data) = std::fs::read(path) {
+            fonts
+                .font_data
+                .insert(name.to_owned(), egui::FontData::from_owned(data).into());
+            emoji_names.push(name.to_owned());
         }
     }
     for (name, path) in jp_fonts {
@@ -148,17 +159,17 @@ fn configure_fonts(ctx: &egui::Context) {
         );
     }
 
-    // Proportional: 日本語 → 罫線系
+    // Proportional: 日本語 → 罫線系 → 絵文字
     let mut proportional = jp_names.clone();
-    for n in &box_names {
+    for n in box_names.iter().chain(emoji_names.iter()) {
         if !proportional.contains(n) {
             proportional.push(n.clone());
         }
     }
 
-    // Monospace / 罫線ボタン: 罫線系 → 日本語
+    // Monospace / 罫線ボタン: 罫線系 → 絵文字 → 日本語
     let mut monospace = box_names.clone();
-    for n in &jp_names {
+    for n in emoji_names.iter().chain(jp_names.iter()) {
         if !monospace.contains(n) {
             monospace.push(n.clone());
         }
@@ -399,37 +410,27 @@ impl eframe::App for KeisenApp {
                             ui.horizontal_wrapped(|ui| {
                                 ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
 
-                                for &ch in section.chars {
+                                for &item in section.items {
                                     // 空白は文字が見えないのでラベルは空にし、後で点線枠を描く
-                                    let label_text = if ch.is_whitespace() {
-                                        String::new()
-                                    } else {
-                                        ch.to_string()
-                                    };
-                                    let label = egui::RichText::new(label_text)
-                                        .family(egui::FontFamily::Name(FONT_KEISEN.into()))
-                                        .size(20.0)
-                                        .color(egui::Color32::from_rgb(245, 248, 250));
-                                    let response = ui.add_sized(
-                                        button_size,
-                                        egui::Button::new(label)
-                                            .corner_radius(6.0)
-                                            .fill(egui::Color32::from_rgb(55, 60, 68)),
-                                    );
+                                    let is_space = item_is_whitespace(item);
+                                    let label_text = if is_space { "" } else { item };
+                                    // 絵文字は字形が広いので Button の固有幅に任せると横に膨らむ。
+                                    // allocate_exact_size で 34x34 に固定し、中に中央描画する。
+                                    let response = palette_button(ui, button_size, label_text);
 
-                                    if ch.is_whitespace() {
+                                    if is_space {
                                         paint_space_indicator(ui, response.rect);
                                     }
 
-                                    let tip = char_tooltip(ch);
+                                    let tip = item_tooltip(item);
                                     let response = response.on_hover_text(tip);
 
                                     if response.clicked() {
-                                        let ok = input::type_char(ch);
+                                        let ok = input::type_text(item);
                                         self.last_status = if ok {
-                                            format!("入力: {}", char_display_name(ch))
+                                            format!("入力: {}", item_display_name(item))
                                         } else {
-                                            format!("送信失敗: {}", char_display_name(ch))
+                                            format!("送信失敗: {}", item_display_name(item))
                                         };
                                     }
                                 }
@@ -450,17 +451,72 @@ impl eframe::App for KeisenApp {
     }
 }
 
+/// 固定サイズのパレットボタン。絵文字の固有幅で横に広がらないようにする。
+fn palette_button(ui: &mut egui::Ui, size: egui::Vec2, label: &str) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+
+    let fill = if response.is_pointer_button_down_on() {
+        egui::Color32::from_rgb(90, 110, 140)
+    } else if response.hovered() {
+        egui::Color32::from_rgb(70, 80, 95)
+    } else {
+        egui::Color32::from_rgb(55, 60, 68)
+    };
+    ui.painter()
+        .rect_filled(rect, egui::CornerRadius::same(6), fill);
+
+    if !label.is_empty() {
+        // 絵文字は 20px だとはみ出しやすいのでやや小さめ
+        let font_size = if label.contains('\u{FE0F}') || label.chars().count() > 1 {
+            16.0
+        } else {
+            20.0
+        };
+        let color = egui::Color32::from_rgb(245, 248, 250);
+        let font_id =
+            egui::FontId::new(font_size, egui::FontFamily::Name(FONT_KEISEN.into()));
+        let galley = ui
+            .painter()
+            .layout_no_wrap(label.to_owned(), font_id, color);
+        // 絵文字は advance 幅と実描画がズレやすいので、mesh_bounds で視覚中央に寄せる
+        let pos = if galley.mesh_bounds.is_positive() {
+            rect.center() - galley.mesh_bounds.center().to_vec2()
+        } else {
+            rect.center() - galley.size() * 0.5
+        };
+        ui.painter().galley(pos, galley, color);
+    }
+
+    response
+}
+
+fn item_is_whitespace(item: &str) -> bool {
+    !item.is_empty() && item.chars().all(|c| c.is_whitespace())
+}
+
 /// ツールチップ用の文字表示（空白は名前で示す）
-fn char_display_name(ch: char) -> String {
-    match ch {
-        '\u{3000}' => "全角スペース".to_string(),
-        c if c.is_whitespace() => format!("空白 U+{:04X}", c as u32),
-        c => c.to_string(),
+fn item_display_name(item: &str) -> String {
+    match item {
+        "\u{3000}" => "全角スペース".to_string(),
+        s if item_is_whitespace(s) => {
+            let codes: String = s
+                .chars()
+                .map(|c| format!("U+{:04X}", c as u32))
+                .collect::<Vec<_>>()
+                .join(" ");
+            format!("空白 {codes}")
+        }
+        s => s.to_string(),
     }
 }
 
-fn char_tooltip(ch: char) -> String {
-    format!("{}  U+{:04X}", char_display_name(ch), ch as u32)
+fn item_tooltip(item: &str) -> String {
+    let codes: String = item
+        .chars()
+        .map(|c| format!("U+{:04X}", c as u32))
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!("{}  {}", item_display_name(item), codes)
 }
 
 /// 空白文字ボタンの中に点線の四角を描く（見た目の目印）
